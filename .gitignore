@@ -15,3 +15,4 @@ ai/.venv/
 *.log
 .DS_Store
 *:Zone.Identifier
+ai/evaluate/.frame_conf_cache.json
