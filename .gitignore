@@ -1,0 +1,17 @@
+node_modules/
+.env
+dist/
+*.pt
+# 학습된 모델(19MB)은 다른 PC에서 바로 쓰도록 올림
+!ai/weights/guardian_best.pt
+runs/
+datasets/
+__pycache__/
+uploads/
+tmp/
+ai/config.yaml
+.venv/
+ai/.venv/
+*.log
+.DS_Store
+*:Zone.Identifier

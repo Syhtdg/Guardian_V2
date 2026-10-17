@@ -1,0 +1,5 @@
+# PyTorch(GPU)는 이 파일보다 먼저 따로 설치하세요. README 의 "PyTorch GPU 설치" 참고.
+ultralytics>=8.3.0
+opencv-python>=4.8
+requests>=2.31
+pyyaml>=6.0

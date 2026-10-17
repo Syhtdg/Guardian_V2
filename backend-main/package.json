@@ -1,0 +1,23 @@
+{
+  "name": "guardian-backend",
+  "version": "2.0.0",
+  "description": "Guardian 화재·연기 감지 관제 시스템 백엔드",
+  "main": "server.js",
+  "private": true,
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "add-user": "node tools/add_user.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.2",
+    "mongoose": "^8.9.0",
+    "nodemailer": "^10.1.1",
+    "socket.io": "^4.8.1"
+  }
+}
