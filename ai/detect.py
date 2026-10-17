@@ -66,6 +66,11 @@ class Reporter:
         if cam.get("latitude") is not None and cam.get("longitude") is not None:
             self.camera["latitude"] = float(cam["latitude"])
             self.camera["longitude"] = float(cam["longitude"])
+        # 공공 CCTV 처럼 http(s) 로 보는 영상이면 주소를 함께 보내 대시보드에서 실시간 영상을 띄울 수 있게 합니다.
+        # rtsp:// 주소는 아이디·비밀번호가 들어 있을 수 있어 보내지 않습니다.
+        src = str(cam.get("source", ""))
+        if src.startswith(("http://", "https://")):
+            self.camera["streamUrl"] = src
         self.pending: deque[dict] = deque(maxlen=20)  # 전송 실패한 감지 (서버 복구 후 재전송)
         self._last_error_sent: dict[str, float] = {}
 
@@ -341,14 +346,49 @@ def run(cfg: dict, source_override=None):
             cv2.destroyAllWindows()
 
 
-def test_alert(cfg: dict):
-    """모델 없이 서버 연결·API 키·대시보드 알림을 확인합니다."""
+def make_test_frame(kind: str = "fire", seed: int | None = None):
+    """시험용 합성 장면(밤 숲 + 불꽃 또는 연기)을 만듭니다. 실제 사진이 아니며 'TEST' 표시가 들어갑니다."""
+    rng = np.random.default_rng(seed)
+    h, w = 360, 640
+    t = np.linspace(0, 1, h)[:, None, None]
+    top, bottom = (np.array([62, 46, 34]), np.array([22, 26, 24])) if kind == "fire" else (np.array([150, 150, 146]), np.array([60, 68, 62]))
+    img = (top * (1 - t) + bottom * t).repeat(w, axis=1).astype(np.float32)
+    for _ in range(18):  # 나무 실루엣
+        x, th = int(rng.integers(0, w)), int(rng.integers(90, 210))
+        cv2.rectangle(img, (x, h - 75 - th), (x + int(rng.integers(7, 16)), h - 60), (12, 16, 14), -1)
+        cv2.circle(img, (x + 5, h - 75 - th), int(rng.integers(22, 42)), (14, 24, 16), -1)
+    cv2.rectangle(img, (0, h - 65), (w, h), (18, 22, 18), -1)
+    cx, base = int(rng.integers(220, 420)), h - 68
+
+    def blob(center, axes, color, alpha, blur):
+        layer = np.zeros_like(img)
+        cv2.ellipse(layer, center, axes, 0, 0, 360, color, -1)
+        layer = cv2.GaussianBlur(layer, (0, 0), blur)
+        a = np.clip(layer.max(axis=2, keepdims=True) / 255, 0, 1) * alpha
+        return img * (1 - a) + layer * alpha
+
+    if kind == "fire":
+        img = blob((cx, base - 30), (70, 60), (20, 80, 200), 0.35, 25)
+        for i in range(5):
+            img = blob((cx + int(rng.integers(-7, 8)), base - 20 - i * 11), (14 - i * 2, 28 - i * 3), (30 + i * 25, 120 + i * 20, 255), 0.95, 4)
+        box = [cx - 38, base - 95, cx + 38, base + 5]
+    else:
+        for i in range(9):
+            img = blob((cx + int(rng.integers(-15, 25)) + i * 4, base - 20 - i * 19), (30 + i * 5, 20 + i * 4), (175, 175, 175), 0.55, 11)
+        box = [cx - 60, base - 210, cx + 90, base]
+    img = np.clip(img + rng.normal(0, 3, img.shape), 0, 255).astype(np.uint8)
+    cv2.putText(img, "TEST", (12, h - 12), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1)
+    return img, [float(v) for v in box]
+
+
+def test_alert(cfg: dict, kind: str = "fire"):
+    """모델 없이 서버 연결·API 키·대시보드 알림을 확인합니다. (kind: fire / smoke)"""
     reporter = Reporter(cfg)
-    img = np.full((360, 640, 3), 40, np.uint8)
-    cv2.putText(img, "Guardian TEST", (150, 190), cv2.FONT_HERSHEY_SIMPLEX, 1.5, (255, 255, 255), 3)
-    image = encode_snapshot(annotate(img, [("fire", 0.9, [200, 120, 440, 260])]), 1280, 80)
+    img, box = make_test_frame(kind)
+    image = encode_snapshot(annotate(img, [(kind, 0.9, box)]), 1280, 80)
+    type_ko = cfg.get("model", {}).get("class_names", {}).get(kind) or ("불" if kind == "fire" else "연기")
     print(f"{reporter.base}/ai/result 로 시험 감지 1건을 보냅니다...")
-    status = reporter._post("/ai/result", {"type": "불", "confidence": 90.0, "image": image, **reporter.camera})
+    status = reporter._post("/ai/result", {"type": type_ko, "confidence": 90.0, "bbox": box, "image": image, **reporter.camera})
     if status in (200, 201):
         print("성공! 대시보드에 알림이 떴는지 확인하세요.")
     elif status == 401:
@@ -362,18 +402,33 @@ def test_alert(cfg: dict):
 def main():
     ap = argparse.ArgumentParser(description="Guardian 불·연기 감지기")
     ap.add_argument("--config", default=str(HERE / "config.yaml"))
-    ap.add_argument("--source", help="config 의 camera.source 대신 사용 (0, rtsp://..., 파일)")
+    ap.add_argument("--source", help="config 의 camera.source 대신 사용 (0, rtsp://..., http(s)://...m3u8, 파일)")
+    ap.add_argument("--camera-id", help="config 의 camera.id 대신 사용")
+    ap.add_argument("--location", help="config 의 camera.location 대신 사용")
+    ap.add_argument("--lat", type=float, help="카메라 위도 (지도 마커)")
+    ap.add_argument("--lng", type=float, help="카메라 경도 (지도 마커)")
     ap.add_argument("--no-show", action="store_true", help="화면 창 띄우지 않기")
-    ap.add_argument("--test-alert", action="store_true", help="서버 연결 시험용 가짜 감지 1건 전송")
+    ap.add_argument("--test-alert", nargs="?", const="fire", choices=["fire", "smoke"],
+                    help="서버 연결 시험용 가짜 감지 1건 전송 (기본 fire, 연기는 --test-alert smoke)")
     args = ap.parse_args()
 
     cfg = load_config(Path(args.config))
+    cam = cfg.setdefault("camera", {})
+    # 대시보드의 '공공 CCTV → AI 감시' 명령처럼 카메라 정보를 명령줄로 바꿀 수 있습니다
+    if args.source is not None:
+        cam["source"] = args.source
+    if args.camera_id:
+        cam["id"] = args.camera_id
+    if args.location:
+        cam["location"] = args.location
+    if args.lat is not None and args.lng is not None:
+        cam["latitude"], cam["longitude"] = args.lat, args.lng
     if args.no_show:
         cfg.setdefault("display", {})["show_window"] = False
     if args.test_alert:
-        test_alert(cfg)
+        test_alert(cfg, args.test_alert)
         return
-    run(cfg, args.source)
+    run(cfg)
 
 
 if __name__ == "__main__":

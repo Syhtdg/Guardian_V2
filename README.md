@@ -5,27 +5,29 @@
 
 ![대시보드](docs/screenshots/dashboard.png)
 
-| 실시간 경보 | 로그 관리 | 모바일 |
+| 실시간 경보 | 카메라 현황 | 모바일 |
 |---|---|---|
-| ![경보 팝업](docs/screenshots/alert.png) | ![로그](docs/screenshots/log.png) | <img src="docs/screenshots/mobile.png" width="220"> |
+| ![경보 팝업](docs/screenshots/alert.png) | ![카메라 현황](docs/screenshots/cameras.png) | <img src="docs/screenshots/mobile.png" width="220"> |
+
+| 소개 페이지 | 로그인 | 로그 관리 |
+|---|---|---|
+| ![소개](docs/screenshots/landing.png) | ![로그인](docs/screenshots/login.png) | ![로그](docs/screenshots/log.png) |
 
 > 캡처의 스냅샷은 시험용으로 직접 만든 합성 이미지입니다(`SAMPLE IMAGE` 표시). 지도는 카카오맵입니다.
 
 ## 주요 기능
 
 - **실시간 감지**: 웹캠·RTSP·영상 파일에서 YOLO11s 로 불·연기 탐지. 최근 10프레임 중 4번 이상 잡혀야 알림(깜빡이는 오탐 방지), 같은 종류는 60초 쿨다운
-- **관제 대시보드**: 감지 기록(썸네일·신뢰도·시간), 불/연기·날짜 필터, 지도 마커, 경보 팝업과 경보음, 오늘의 감지 요약
+- **관제 대시보드**: 감지 기록(썸네일·신뢰도·시간), 불/연기·날짜 필터, 지도 마커, 경보 팝업과 경보음(켜기/끄기), 오늘의 감지 요약, 실제 기상 정보
+- **공공 CCTV 연동**: 국가교통정보센터(ITS) 공공 CCTV 를 지도에 표시하고 실시간 영상(HLS) 재생. 버튼 하나로 그 CCTV 를 AI 감지기가 감시하는 명령을 만들어 주고, 불·연기가 나면 경보 창에서 그 장소의 실시간 영상을 바로 볼 수 있음
+- **카메라 현황**: 감지·오류 기록으로 카메라별 불·연기·오류 횟수와 마지막 감지·오류를 집계
+- **소개 페이지**: 로그인 없이 프로젝트 기능·구성·AI 성능을 보여 주는 첫 화면
 - **운영 안정성**: 카메라·모델 오류를 서버에 보고, 서버가 끊기면 감지 결과를 보관했다가 재전송
 - **계정·보안**: JWT 로그인, 이메일 인증코드로 비밀번호 재설정, scrypt 해시, 감지기 전용 API 키, 요청 횟수 제한
 
 ## 구성
 
-```
-[카메라/영상] → ai/detect.py (YOLO) ──POST /ai/result (X-API-Key)──▶ backend-main (Express + MongoDB)
-                                                                        │ socket.io 'aiResult' (로그인 토큰 필요)
-                                                                        ▼
-                                                              frontend-main (Vue 3 + Vuetify) 대시보드
-```
+![시스템 구성도](docs/architecture.svg)
 
 | 영역 | 기술 |
 |---|---|
@@ -63,11 +65,15 @@ AI Hub 「화재 발생 예측 영상」(야외 화재·연기 영상 프레임)
 - `eval_false_alarm.py`: 학습에 쓰지 않은 사진 2,000장씩으로 이미지 단위 감지율·오탐률. 현재 설정(불 0.5 / 연기 0.45)에서 불·연기 사진의 80.7% 를 찾고, 불·연기가 없는 평범한 사진의 오탐은 1.9% 였습니다.
 - `eval_video_sim.py`: 영상 순서대로 모델을 돌리고 `detect.py` 의 확정 로직(10프레임 중 4회)을 그대로 적용해, 설정별 첫 알림까지의 지연과 오경보를 비교합니다. 연기 신뢰도 기준을 0.45 → 0.25 로 낮춰도 연기를 잡는 영상 수는 늘지 않아(7개 중 5개) 기본값을 유지했습니다.
 
-## 데이터 출처와 이용 안내
+## 데이터·자료 출처
 
 - 학습 데이터는 [AI Hub](https://www.aihub.or.kr) 「화재 발생 예측 영상」입니다. 데이터의 이용 조건은 AI Hub 이용약관을 따릅니다.
 - **원본 이미지·라벨은 이 저장소에 포함하지 않았습니다.** 문서의 학습 결과 그림도 사진이 없는 그래프만 사용했고, 대시보드 캡처는 합성 이미지입니다.
 - 학습된 가중치(`ai/weights/guardian_best.pt`, 19MB)는 바로 실행해 볼 수 있도록 포함했습니다. 직접 학습하려면 AI Hub 에서 데이터를 받아 아래 4장을 따라 하세요.
+- 로그인 배경 사진: [Unsplash](https://unsplash.com/photos/In6CM5iF1P8) (matt-c, Unsplash License)
+- 일러스트·구성도·지도 마커·파비콘: 이 프로젝트에서 직접 만든 SVG (`frontend-main/src/assets/illust/`)
+- 경보음: 음원 파일 없이 브라우저 Web Audio API 로 합성 (`frontend-main/src/utils/alarm.js`)
+- 날씨: [Open-Meteo](https://open-meteo.com) (무료, 키 불필요) · 지도: 카카오맵 JavaScript SDK
 
 ---
 
@@ -217,11 +223,34 @@ copy config.example.yaml config.yaml          # macOS/Linux: cp
 - GPU 가 없으면 `model.device: cpu`, `detection.frame_stride: 3` (CPU 는 느리므로 3프레임마다 한 번 추론)
 
 ```bash
-python detect.py --test-alert      # 서버 연결 확인 (대시보드에 시험 알림)
+python detect.py --test-alert      # 서버 연결 확인 (대시보드에 시험 알림, 연기는 --test-alert smoke)
 python detect.py                   # 웹캠으로 실시간 감지 (창에서 q 로 종료)
 ```
 
 화면 창 없이 돌리려면 `--no-show`. 웹캠이 안 열리면 `camera.source` 를 1, 2 로 바꿔 보세요.
+
+### 4-7. 공공 CCTV 연동 (국가교통정보센터 ITS)
+
+원래 기획은 **직접 설치했거나 공공기관이 가진 CCTV 가 비추는 산·도로에서 불이 나면 먼저 알리는 것**이었습니다.
+CCTV 를 살 예산이 없어 캡스톤 때는 준비한 영상을 트는 방식으로 대신했는데, v2 에서는 공공 CCTV 를 직접 연결합니다.
+
+1. [국가교통정보센터](https://www.its.go.kr) 회원가입 → 공공데이터 개방 → 오픈API 에서 **CCTV 정보** 인증키 발급
+2. `backend-main/.env` 에 `ITS_API_KEY=발급받은 키` 를 넣고 백엔드 재시작
+   (`ITS_API_KEY=test` 로 두면 ITS 가 주는 시험용 목록이 지도에 표시되지만 영상은 재생되지 않습니다)
+3. 대시보드 지도 오른쪽 위 **공공 CCTV** 버튼 → 지도 범위의 CCTV 가 파란 아이콘으로 표시 → 누르면 실시간 영상
+4. 영상 창의 **"이 CCTV 를 AI 로 감시하기"** 명령을 복사해 `ai` 폴더에서 실행하면, 감지기가 그 영상을 분석합니다.
+   ```bash
+   python detect.py --source "<CCTV 영상 주소>" --camera-id "cctv-…" --location "<CCTV 이름>" --lat 37.4 --lng 127.1 --no-show
+   ```
+   불·연기가 확인되면 그 CCTV 위치로 경보가 오고, 경보 창의 **실시간 영상 보기** 로 현장 영상을 바로 확인합니다.
+   (`--source` 가 http(s) 주소일 때만 영상 주소를 서버로 보냅니다. 아이디·비밀번호가 들어갈 수 있는 rtsp 주소는 보내지 않습니다.)
+
+알아 둘 점
+
+- ITS 는 **도로(국도·고속도로) CCTV** 입니다. 산림청 산불 감시 CCTV 는 공개 API 가 없어 연동하지 못했습니다. 다만 같은 방식으로 http(s) 영상 주소만 있으면 어떤 CCTV 든 `--source` 로 감시할 수 있습니다.
+- ITS 영상 주소에는 유효 시간이 있어, 오래 감시하려면 주소를 다시 받아야 할 수 있습니다.
+- 공공 CCTV 영상은 H.264 라서 Chrome·Edge·Safari 에서 재생됩니다. 사이트를 https 로 배포하면 http 영상은 브라우저가 막을 수 있습니다.
+- 이용 조건은 국가교통정보센터 오픈API 이용약관을 따릅니다.
 
 ## 5. API 요약
 
@@ -231,7 +260,8 @@ python detect.py                   # 웹캠으로 실시간 감지 (창에서 q 
 | `POST /findID` | - | 이름+이메일 → **아이디를 메일로** 발송 |
 | `POST /password/code` → `/password/reset` | - | 인증코드 메일 발송 → 코드+새 비밀번호로 변경 (10분 유효, 5회 틀리면 무효) |
 | `GET /ai/result/all`, `/ai/error/all`, `/log/all` | JWT | 감지·오류·사용자 로그 조회 (`?limit=`, `?type=불`) |
-| `POST /ai/result` | **X-API-Key** | `{type:"불"\|"연기", confidence:0~100, location, cameraId?, latitude?, longitude?, bbox?, image?(base64 jpg)}` |
+| `POST /ai/result` | **X-API-Key** | `{type:"불"\|"연기", confidence:0~100, location, cameraId?, latitude?, longitude?, bbox?, image?(base64 jpg), streamUrl?(http(s) 실시간 영상)}` |
+| `GET /cctv/public?minX&maxX&minY&maxY` | JWT | 지도 범위의 공공 CCTV 목록(ITS). 서버 `.env` 의 `ITS_API_KEY` 필요 |
 | `POST /ai/error` | **X-API-Key** | `{errorType, message?, location?, cameraId?, rawData?}` |
 | socket.io `aiResult`, `aiError` | JWT (`auth.token`) | 대시보드 실시간 알림 |
 
@@ -264,7 +294,13 @@ python detect.py                   # 웹캠으로 실시간 감지 (창에서 q 
 - 백엔드 패키지 39개 → 6개 (안 쓰던 zeromq, rtsp, sharp 등 제거), socket.io 를 프런트와 같은 4.x 로, mongoose 8.x
 - `tools/add_user.js` 를 실제 모델(이메일·이름 필수)에 맞게: `npm run add-user -- 아이디 비밀번호 이메일 이름`
 
-**아직 남은 것**: 기상정보는 예시 값(실제 API 연동 전), "CCTV 관리·사용자 관리" 메뉴는 준비 중.
+**화면 추가**: 기상 정보를 실제 값으로 연동(Open-Meteo, 키 불필요, 10분마다 갱신), 쓸 수 없던 "CCTV 관리·사용자 관리" 메뉴를 "카메라 현황" 화면(감지·오류 기록으로 카메라별 집계)으로 교체, 로그인 화면을 대시보드와 같은 디자인으로 통일하고 모바일 폭 대응.
+
+**포트폴리오 보강**: 로그인 없이 보는 소개 페이지(직접 만든 히어로 일러스트·구성도), 404 화면, SVG 파비콘, 출처를 알 수 없던 경보음 mp3 를 Web Audio 합성음으로 교체하고 경보음 켜기/끄기 버튼 추가, 쓰지 않는 이미지 6개 삭제.
+
+**공공 CCTV**: ITS 공공 CCTV 지도 표시·실시간 영상(hls.js), 감지기의 http(s) 영상 감시(`--source`, `--camera-id`, `--location`, `--lat`, `--lng`), 경보 창의 실시간 영상 보기, 시험 알림 이미지를 불·연기 합성 장면으로 교체.
+
+**아직 남은 것**: 카메라 등록·실시간 접속 상태 확인, 사용자 관리 화면.
 
 ## 7. 알려진 한계
 

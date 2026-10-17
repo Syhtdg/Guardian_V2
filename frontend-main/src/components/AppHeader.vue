@@ -7,8 +7,7 @@
     <div class="nav d-none d-md-flex">
       <v-btn to="/dashboard" variant="text" prepend-icon="mdi-view-dashboard-outline">대시보드</v-btn>
       <v-btn to="/log" variant="text" prepend-icon="mdi-text-box-search-outline">로그 관리</v-btn>
-      <v-btn variant="text" prepend-icon="mdi-cctv" disabled>CCTV 관리</v-btn>
-      <v-btn variant="text" prepend-icon="mdi-account-group-outline" disabled>사용자 관리</v-btn>
+      <v-btn to="/cameras" variant="text" prepend-icon="mdi-cctv">카메라 현황</v-btn>
     </div>
 
     <v-spacer />
@@ -30,6 +29,7 @@
         <v-divider />
         <v-list-item to="/dashboard" prepend-icon="mdi-view-dashboard-outline" title="대시보드" class="d-md-none" />
         <v-list-item to="/log" prepend-icon="mdi-text-box-search-outline" title="로그 관리" class="d-md-none" />
+        <v-list-item to="/cameras" prepend-icon="mdi-cctv" title="카메라 현황" class="d-md-none" />
         <v-list-item prepend-icon="mdi-logout" title="로그아웃" @click="handleLogout" />
       </v-list>
     </v-menu>

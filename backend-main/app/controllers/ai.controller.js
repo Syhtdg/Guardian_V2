@@ -59,6 +59,10 @@ exports.receiveResult = async (req, res) => {
     doc.longitude = body.longitude;
   }
   if (Array.isArray(body.bbox) && body.bbox.length === 4 && body.bbox.every(isNum)) doc.bbox = body.bbox;
+  // 실시간 영상 주소는 http(s) 만 받습니다 (rtsp 주소에는 계정 정보가 들어 있을 수 있음)
+  if (typeof body.streamUrl === 'string' && /^https?:\/\//.test(body.streamUrl) && body.streamUrl.length <= 1000) {
+    doc.streamUrl = body.streamUrl;
+  }
 
   try {
     if (typeof body.image === 'string' && body.image) doc.imageUrl = saveSnapshot(body.image);

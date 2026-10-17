@@ -10,6 +10,13 @@
         <span class="live-dot" :class="{ 'live-dot--on': socketConnected }" />
         {{ socketConnected ? '실시간 연결됨' : '연결 끊김' }}
       </v-chip>
+      <v-btn
+        :icon="muted ? 'mdi-volume-off' : 'mdi-volume-high'"
+        :title="muted ? '경보음 꺼짐 (누르면 켜기)' : '경보음 켜짐 (누르면 끄기)'"
+        variant="text"
+        size="small"
+        @click="toggleMute"
+      />
     </template>
   </AppHeader>
 
@@ -102,6 +109,15 @@
                 </div>
                 <div class="log-meta">
                   <span v-if="log.cameraId"><v-icon icon="mdi-cctv" size="13" class="mr-1" />{{ log.cameraId }}</span>
+                  <v-btn
+                    v-if="log.streamUrl"
+                    icon="mdi-play-circle-outline"
+                    size="x-small"
+                    variant="text"
+                    color="info"
+                    title="실시간 영상 보기"
+                    @click.stop="openStream(log)"
+                  />
                   <span class="conf">
                     <v-progress-linear
                       :model-value="log.confidence"
@@ -127,10 +143,26 @@
               <v-icon icon="mdi-map-outline" color="primary" class="mr-2" />
               감지 위치
             </div>
-            <span class="text-caption text-medium-emphasis">카메라별 최근 감지 · 기록을 누르면 이동</span>
+            <div class="d-flex align-center ga-2">
+              <span class="text-caption text-medium-emphasis d-none d-lg-inline">카메라별 최근 감지 · 기록을 누르면 이동</span>
+              <v-btn
+                size="small"
+                :variant="cctvOn ? 'flat' : 'tonal'"
+                :color="cctvOn ? 'info' : undefined"
+                prepend-icon="mdi-cctv"
+                :loading="cctvLoading"
+                title="국가교통정보센터 공공 CCTV 를 지도에 표시"
+                @click="toggleCctv"
+              >
+                공공 CCTV<span v-if="cctvOn && cctvItems.length">&nbsp;{{ cctvItems.length }}</span>
+              </v-btn>
+            </div>
           </div>
           <div class="map-wrap">
             <div id="map" class="map" />
+            <div v-if="cctvOn && cctvNote" class="cctv-note">
+              <v-icon icon="mdi-information-outline" size="16" class="mr-1" />{{ cctvNote }}
+            </div>
             <div v-if="mapError" class="map-error">
               <v-icon icon="mdi-map-marker-off-outline" size="36" class="mb-2" />
               {{ mapError }}
@@ -144,7 +176,7 @@
               <v-icon icon="mdi-weather-partly-cloudy" color="info" class="mr-2" />
               기상 정보
             </div>
-            <v-chip size="x-small" variant="tonal" color="warning">예시 값 · API 연동 전</v-chip>
+            <v-chip size="x-small" variant="tonal" :color="weatherError ? 'error' : 'info'">{{ weatherNote }}</v-chip>
           </div>
           <v-row dense class="px-4 pb-4">
             <v-col v-for="w in weather" :key="w.label" cols="6" sm="3">
@@ -184,12 +216,29 @@
           </div>
         </div>
 
+        <v-btn
+          v-if="alertData?.streamUrl"
+          block
+          variant="tonal"
+          color="info"
+          prepend-icon="mdi-play-circle-outline"
+          class="mb-3"
+          @click="openStream(alertData)"
+        >
+          실시간 영상 보기
+        </v-btn>
+        <v-alert v-if="soundBlocked" type="info" variant="tonal" density="compact" class="mb-3">
+          브라우저가 경보음을 막았습니다. 화면을 한 번 클릭해 두면 다음 경보부터 소리가 납니다.
+        </v-alert>
         <v-btn block size="large" color="primary" variant="flat" prepend-icon="mdi-bell-off-outline" @click="closeAlert">
           확인 (경보 끄기)
         </v-btn>
       </div>
     </v-card>
   </v-dialog>
+
+  <!-- 공공 CCTV · 감지 카메라 실시간 영상 -->
+  <CctvDialog v-model="cctvDialog" :cctv="cctvSelected" :show-command="cctvShowCommand" />
 </template>
 
 <script setup>
@@ -200,8 +249,12 @@ import { io } from 'socket.io-client'
 import { format, formatDistanceToNow, isToday } from 'date-fns'
 import { ko } from 'date-fns/locale'
 import { API_URL, getToken, logout, assetUrl } from '@/utils/auth'
+import { fetchWeather } from '@/utils/weather'
+import { startAlarm, stopAlarm, unlockAlarm, isMuted, setMuted } from '@/utils/alarm'
 import AppHeader from '@/components/AppHeader.vue'
 import SnapshotImage from '@/components/SnapshotImage.vue'
+import CctvDialog from '@/components/CctvDialog.vue'
+import markerCctv from '@/assets/illust/marker-cctv.svg'
 import emptyImg from '@/assets/illust/empty-safe.svg'
 import markerFire from '@/assets/illust/marker-fire.svg'
 import markerSmoke from '@/assets/illust/marker-smoke.svg'
@@ -215,21 +268,45 @@ const MAP_CENTER = {
   lng: Number(import.meta.env.VITE_MAP_CENTER_LNG) || 128.8125
 }
 
-// 기상 정보는 아직 실제 API 연동 전 예시 값
-const weather = [
-  { label: '온도', value: '20℃', icon: 'mdi-thermometer', color: 'warning' },
-  { label: '습도', value: '62%', icon: 'mdi-water-percent', color: 'info' },
-  { label: '풍속', value: '2.0m/s', icon: 'mdi-weather-windy', color: 'secondary' },
-  { label: '강수량', value: '0mm', icon: 'mdi-weather-rainy', color: 'info' }
-]
+// 기상 정보: 지도 중심 좌표의 현재 날씨(Open-Meteo). 10분마다 갱신
+const weatherData = ref(null)
+const weatherError = ref(false)
+let weatherTimer = null
+
+const weather = computed(() => {
+  const w = weatherData.value
+  const val = (v, unit) => (v === undefined || v === null ? '-' : `${v}${unit}`)
+  return [
+    { label: '온도', value: val(w?.temperature, '℃'), icon: 'mdi-thermometer', color: 'warning' },
+    { label: '습도', value: val(w?.humidity, '%'), icon: 'mdi-water-percent', color: 'info' },
+    { label: '풍속', value: val(w?.wind, 'm/s'), icon: 'mdi-weather-windy', color: 'secondary' },
+    { label: '강수량', value: val(w?.rain, 'mm'), icon: 'mdi-weather-rainy', color: 'info' }
+  ]
+})
+const weatherNote = computed(() => {
+  if (weatherError.value) return '날씨를 불러오지 못했습니다'
+  if (!weatherData.value) return '불러오는 중...'
+  return `${format(weatherData.value.updatedAt, 'HH:mm')} 기준 · Open-Meteo`
+})
+
+async function loadWeather () {
+  try {
+    weatherData.value = await fetchWeather(MAP_CENTER.lat, MAP_CENTER.lng)
+    weatherError.value = false
+  } catch (e) {
+    console.warn('날씨 불러오기 실패:', e)
+    weatherError.value = !weatherData.value // 이전 값이 있으면 그대로 보여 줌
+  }
+}
 
 // 다이얼로그 상태
 const alertDialog = ref(false)
 const alertData = ref(null)
 const alertImage = ref('')
 
-// 재생 중인 사운드
-const playingSounds = []
+// 경보음 (Web Audio 로 합성, 음원 파일 없음)
+const muted = ref(isMuted())
+const soundBlocked = ref(false)
 
 // 필터 및 로그
 const logs = ref([])
@@ -250,6 +327,18 @@ let tick = null
 const mapError = ref('')
 let map = null
 let markers = []
+
+// 공공 CCTV (국가교통정보센터 ITS) — 서버가 키를 들고 대신 조회
+const cctvOn = ref(false)
+const cctvItems = ref([])
+const cctvLoading = ref(false)
+const cctvNote = ref('')
+const cctvDialog = ref(false)
+const cctvSelected = ref(null)
+const cctvShowCommand = ref(true)
+let cctvMarkers = []
+let cctvTimer = null
+const CCTV_MAX_LEVEL = 9 // 이보다 축소하면 범위가 넓어 조회하지 않음
 
 const fetchLogs = async () => {
   try {
@@ -315,17 +404,15 @@ const alertDetails = computed(() => {
   return rows
 })
 
-function stopSounds () {
-  playingSounds.forEach(sound => {
-    sound.pause()
-    sound.currentTime = 0
-  })
-  playingSounds.length = 0
+function toggleMute () {
+  muted.value = !muted.value
+  setMuted(muted.value)
+  if (!muted.value) unlockAlarm()
 }
 
 function closeAlert () {
   alertDialog.value = false
-  stopSounds()
+  stopAlarm()
 }
 
 function showAlert (data) {
@@ -333,17 +420,8 @@ function showAlert (data) {
   alertImage.value = assetUrl(data.imageUrl)
   alertDialog.value = true
 
-  // 이미 울리고 있으면 겹쳐서 재생하지 않음
-  if (playingSounds.length === 0) {
-    const sound = new Audio(data.type === '불' ? '/sounds/fire.mp3' : '/sounds/smoke.mp3')
-    sound.volume = 1.0
-    sound.loop = true
-    sound.play().catch(err => {
-      // 브라우저는 사용자가 화면을 한 번 클릭하기 전에는 소리 자동재생을 막습니다
-      console.warn('사운드 재생 실패:', err)
-    })
-    playingSounds.push(sound)
-  }
+  // 브라우저가 소리를 막았으면(화면을 한 번도 클릭하지 않음) 팝업에 안내
+  soundBlocked.value = !muted.value && !startAlarm(data.type === '불' ? 'fire' : 'smoke')
 }
 
 function connectSocket () {
@@ -399,7 +477,119 @@ function initMap () {
     level: 4
   })
   map.addControl(new kakao.maps.ZoomControl(), kakao.maps.ControlPosition.RIGHT)
+  // 지도를 옮기거나 확대하면 그 범위의 공공 CCTV 를 다시 불러옴
+  kakao.maps.event.addListener(map, 'idle', () => { if (cctvOn.value) scheduleCctv() })
   drawMarkers()
+}
+
+// ───────── 공공 CCTV ─────────
+
+const CCTV_START_LEVEL = 7 // 켤 때 이보다 확대돼 있으면 주변 약 15km 가 보이게 축소
+
+function toggleCctv () {
+  cctvOn.value = !cctvOn.value
+  if (!cctvOn.value) return clearCctv()
+  // 너무 확대된 상태면 주변 CCTV 가 보이게 축소 (축소가 끝나면 idle 이벤트에서 불러옴)
+  if (map && map.getLevel() < CCTV_START_LEVEL) map.setLevel(CCTV_START_LEVEL)
+  else loadCctv()
+}
+
+function scheduleCctv () {
+  clearTimeout(cctvTimer)
+  cctvTimer = setTimeout(loadCctv, 400)
+}
+
+function clearCctv () {
+  cctvMarkers.forEach(m => m.setMap(null))
+  cctvMarkers = []
+  cctvItems.value = []
+  cctvNote.value = ''
+}
+
+async function loadCctv () {
+  if (!map) {
+    cctvNote.value = '지도가 준비되지 않았습니다.'
+    return
+  }
+  if (map.getLevel() > CCTV_MAX_LEVEL) {
+    // 범위가 넓으면 새로 조회하지 않고, 이미 표시한 마커는 그대로 둠
+    cctvNote.value = cctvItems.value.length
+      ? '지도를 더 확대하면 이 범위의 공공 CCTV 를 새로 불러옵니다.'
+      : '지도를 더 확대하면 공공 CCTV 가 표시됩니다.'
+    return
+  }
+  const b = map.getBounds()
+  const sw = b.getSouthWest()
+  const ne = b.getNorthEast()
+  cctvLoading.value = true
+  try {
+    const { data } = await axios.get('/cctv/public', {
+      params: { minX: sw.getLng(), maxX: ne.getLng(), minY: sw.getLat(), maxY: ne.getLat() }
+    })
+    if (!cctvOn.value) return
+    cctvItems.value = data.items.map(it => ({ ...it, source: data.source }))
+    drawCctv()
+    if (data.testKey) {
+      cctvNote.value = '시험 키 사용 중: ITS 가 주는 예시 목록(수도권)이 표시되며 영상은 재생되지 않습니다.'
+      // 예시 목록이 지금 화면 밖에 있으면 그쪽으로 이동
+      const inView = cctvItems.value.some(it => b.contain(new window.kakao.maps.LatLng(it.lat, it.lng)))
+      if (!inView && cctvItems.value.length) {
+        const bounds = new window.kakao.maps.LatLngBounds()
+        cctvItems.value.forEach(it => bounds.extend(new window.kakao.maps.LatLng(it.lat, it.lng)))
+        map.setBounds(bounds)
+      }
+    } else {
+      cctvNote.value = cctvItems.value.length ? '' : '이 범위에는 공공 CCTV 가 없습니다. 지도를 옮겨 보세요.'
+    }
+  } catch (e) {
+    const code = e.response?.data?.code
+    cctvNote.value = e.response?.data?.message || '공공 CCTV 정보를 가져오지 못했습니다.'
+    if (code !== 'TOO_WIDE') clearCctvMarkersOnly()
+  } finally {
+    cctvLoading.value = false
+  }
+}
+
+function clearCctvMarkersOnly () {
+  cctvMarkers.forEach(m => m.setMap(null))
+  cctvMarkers = []
+}
+
+function drawCctv () {
+  const { kakao } = window
+  clearCctvMarkersOnly()
+  const image = new kakao.maps.MarkerImage(markerCctv, new kakao.maps.Size(28, 28), { offset: new kakao.maps.Point(14, 14) })
+  for (const it of cctvItems.value) {
+    const marker = new kakao.maps.Marker({
+      map,
+      image,
+      position: new kakao.maps.LatLng(it.lat, it.lng),
+      title: `${it.name} (공공 CCTV)`,
+      zIndex: 1
+    })
+    kakao.maps.event.addListener(marker, 'click', () => openCctv(it))
+    cctvMarkers.push(marker)
+  }
+}
+
+function openCctv (it) {
+  cctvSelected.value = it
+  cctvShowCommand.value = true
+  cctvDialog.value = true
+}
+
+// 감지 기록에 영상 주소가 있으면(공공 CCTV 를 감시하던 감지기) 그 장소의 실시간 영상을 띄움
+function openStream (log) {
+  cctvSelected.value = {
+    id: log.cameraId || 'stream',
+    name: log.location,
+    lat: log.latitude,
+    lng: log.longitude,
+    url: log.streamUrl,
+    source: log.cameraId ? `감지 카메라 ${log.cameraId}` : '감지 카메라'
+  }
+  cctvShowCommand.value = false
+  cctvDialog.value = true
 }
 
 function drawMarkers () {
@@ -455,14 +645,20 @@ onMounted(() => {
   fetchLogs()
   connectSocket()
   loadKakao()
+  loadWeather()
+  window.addEventListener('pointerdown', unlockAlarm) // 클릭 한 번이면 이후 경보음 허용
+  weatherTimer = setInterval(loadWeather, 10 * 60 * 1000)
   tick = setInterval(() => { now.value = Date.now() }, 30000)
 })
 
 // 화면을 떠날 때 소켓을 닫아야 다시 들어왔을 때 알림이 두 번씩 뜨지 않습니다
 onUnmounted(() => {
   socket?.disconnect()
-  stopSounds()
+  stopAlarm()
+  window.removeEventListener('pointerdown', unlockAlarm)
   clearInterval(tick)
+  clearInterval(weatherTimer)
+  clearTimeout(cctvTimer)
 })
 </script>
 
@@ -620,6 +816,20 @@ onUnmounted(() => {
   border-radius: 12px;
   overflow: hidden;
   background: #0b0d10;
+}
+.cctv-note {
+  position: absolute;
+  left: 12px;
+  right: 60px;
+  bottom: 12px;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: rgba(15, 17, 21, 0.85);
+  color: rgba(255, 255, 255, 0.85);
+  font-size: 12.5px;
 }
 .map-error {
   position: absolute;

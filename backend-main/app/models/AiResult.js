@@ -10,6 +10,7 @@ const AiResultSchema = new mongoose.Schema({
   longitude: { type: Number },
   bbox: { type: [Number] },                      // [x1, y1, x2, y2] (픽셀, 원본 프레임 기준)
   imageUrl: { type: String },                    // 감지 순간 스냅샷 (/snapshots/xxx.jpg)
+  streamUrl: { type: String },                   // 공공 CCTV 등 http(s) 실시간 영상 주소 (있을 때만)
   timestamp: { type: Date, default: Date.now, index: true },
 });
 

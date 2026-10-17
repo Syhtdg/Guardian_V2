@@ -46,6 +46,8 @@ const config = {
     .filter(Boolean),
   allowSignup: (process.env.ALLOW_SIGNUP || 'true') === 'true',
   uploadDir: path.resolve(__dirname, '..', process.env.UPLOAD_DIR || 'uploads'),
+  // 국가교통정보센터(ITS) 공공 CCTV 오픈API 키 (비워 두면 공공 CCTV 지도 기능이 꺼집니다)
+  itsApiKey: process.env.ITS_API_KEY || '',
   smtp: {
     host: process.env.SMTP_HOST || '',
     port: Number(process.env.SMTP_PORT || 465),

@@ -13,14 +13,16 @@ const router = createRouter({
 const PUBLIC_PATHS = ['/', '/login', '/signup', '/find_ID', '/reset_password']
 
 router.beforeEach(to => {
-  const isPublic = PUBLIC_PATHS.includes(to.path.replace(/\/$/, '') || '/')
+  // 없는 주소(404 화면)도 로그인 없이 보여 줌
+  const isNotFound = to.matched.some(r => r.path.startsWith('/:path'))
+  const isPublic = isNotFound || PUBLIC_PATHS.includes(to.path.replace(/\/$/, '') || '/')
   const loggedIn = isLoggedIn()
 
   if (!isPublic && !loggedIn) {
     return { path: '/login', query: { redirect: to.fullPath } }
   }
-  // 이미 로그인했으면 로그인 화면 대신 대시보드로
-  if (loggedIn && (to.path === '/' || to.path === '/login')) {
+  // 이미 로그인했으면 로그인 화면 대신 대시보드로 ('/' 소개 화면은 누구나 볼 수 있음)
+  if (loggedIn && to.path === '/login') {
     return { path: '/dashboard' }
   }
 })
